@@ -61,6 +61,36 @@ export type SettingsConfig = {
   [key: string]: unknown;
 };
 
+export type StorageBackendType = "json" | "sqlite" | "postgres" | "git";
+
+export type StorageConfig = {
+  type: StorageBackendType;
+  database_url: string;
+  git_repo_url: string;
+  git_token: string;
+  git_branch: string;
+  git_file_path: string;
+  git_auth_keys_file_path: string;
+  database_url_masked?: string;
+  git_repo_url_masked?: string;
+  git_token_masked?: string;
+};
+
+export type StorageEnvOverrides = {
+  type: boolean;
+  database_url: boolean;
+  git_repo_url: boolean;
+  git_token: boolean;
+  git_branch: boolean;
+  git_file_path: boolean;
+  git_auth_keys_file_path: boolean;
+};
+
+export type StorageRuntimeInfo = {
+  backend: Record<string, unknown>;
+  health: Record<string, unknown>;
+};
+
 export type ManagedImage = {
   path?: string;
   name: string;
@@ -306,6 +336,37 @@ export async function updateSettingsConfig(settings: SettingsConfig) {
   return httpRequest<{ config: SettingsConfig }>("/api/settings", {
     method: "POST",
     body: settings,
+  });
+}
+
+export async function fetchStorageInfo() {
+  return httpRequest<{
+    config: StorageConfig;
+    env_overrides: StorageEnvOverrides;
+    backend: Record<string, unknown>;
+    health: Record<string, unknown>;
+  }>("/api/storage/info");
+}
+
+export async function updateStorageSettings(body: StorageConfig & { migrate_existing_data?: boolean }) {
+  return httpRequest<{
+    storage: StorageConfig;
+    env_overrides: StorageEnvOverrides;
+    migration: {
+      migrated: boolean;
+      accounts: number;
+      auth_keys: number;
+    };
+    applied: StorageRuntimeInfo;
+  }>("/api/storage/settings", {
+    method: "POST",
+    body,
+  });
+}
+
+export async function restartService() {
+  return httpRequest<{ ok: boolean; message: string }>("/api/storage/restart", {
+    method: "POST",
   });
 }
 

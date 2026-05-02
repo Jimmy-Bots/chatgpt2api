@@ -9,18 +9,24 @@ import {
   fetchCPAPoolFiles,
   fetchCPAPools,
   fetchRegisterConfig,
+  fetchStorageInfo,
   resetRegister as resetRegisterApi,
   fetchSettingsConfig,
+  restartService,
   startRegister,
   startCPAImport,
   stopRegister,
   updateCPAPool,
   updateRegisterConfig,
   updateSettingsConfig,
+  updateStorageSettings,
   type CPAPool,
   type CPARemoteFile,
   type RegisterConfig,
   type SettingsConfig,
+  type StorageBackendType,
+  type StorageConfig,
+  type StorageEnvOverrides,
 } from "@/lib/api";
 
 export const PAGE_SIZE_OPTIONS = ["50", "100", "200"] as const;
@@ -38,6 +44,28 @@ function normalizeConfig(config: SettingsConfig): SettingsConfig {
     proxy: typeof config.proxy === "string" ? config.proxy : "",
     base_url: typeof config.base_url === "string" ? config.base_url : "",
   };
+}
+
+function normalizeStorageConfig(config: StorageConfig): StorageConfig {
+  return {
+    type: (config.type || "json") as StorageBackendType,
+    database_url: String(config.database_url || ""),
+    git_repo_url: String(config.git_repo_url || ""),
+    git_token: String(config.git_token || ""),
+    git_branch: String(config.git_branch || "main"),
+    git_file_path: String(config.git_file_path || "accounts.json"),
+    git_auth_keys_file_path: String(config.git_auth_keys_file_path || "auth_keys.json"),
+    database_url_masked: String(config.database_url_masked || ""),
+    git_repo_url_masked: String(config.git_repo_url_masked || ""),
+    git_token_masked: String(config.git_token_masked || ""),
+  };
+}
+
+function hasStorageEnvOverrides(overrides: StorageEnvOverrides | null | undefined) {
+  if (!overrides) {
+    return false;
+  }
+  return Object.values(overrides).some(Boolean);
 }
 
 function normalizeFiles(items: CPARemoteFile[]) {
@@ -61,6 +89,13 @@ type SettingsStore = {
   config: SettingsConfig | null;
   isLoadingConfig: boolean;
   isSavingConfig: boolean;
+
+  storageConfig: StorageConfig | null;
+  storageEnvOverrides: StorageEnvOverrides | null;
+  isLoadingStorage: boolean;
+  isSavingStorage: boolean;
+  isRestartingService: boolean;
+  migrateStorageData: boolean;
 
   registerConfig: RegisterConfig | null;
   isLoadingRegister: boolean;
@@ -98,6 +133,13 @@ type SettingsStore = {
   setLogLevel: (level: string, enabled: boolean) => void;
   setProxy: (value: string) => void;
   setBaseUrl: (value: string) => void;
+
+  loadStorage: () => Promise<void>;
+  setStorageType: (value: StorageBackendType) => void;
+  setStorageField: (key: keyof StorageConfig, value: string) => void;
+  setMigrateStorageData: (value: boolean) => void;
+  saveStorage: () => Promise<boolean>;
+  saveStorageAndRestart: () => Promise<void>;
 
   loadRegister: (silent?: boolean) => Promise<void>;
   setRegisterConfig: (config: RegisterConfig) => void;
@@ -142,6 +184,13 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
   isLoadingConfig: true,
   isSavingConfig: false,
 
+  storageConfig: null,
+  storageEnvOverrides: null,
+  isLoadingStorage: true,
+  isSavingStorage: false,
+  isRestartingService: false,
+  migrateStorageData: true,
+
   registerConfig: null,
   isLoadingRegister: true,
   isSavingRegister: false,
@@ -169,7 +218,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
   isStartingImport: false,
 
   initialize: async () => {
-    await Promise.allSettled([get().loadConfig(), get().loadPools()]);
+    await Promise.allSettled([get().loadConfig(), get().loadStorage(), get().loadPools()]);
   },
 
   loadConfig: async () => {
@@ -276,6 +325,92 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
         },
       };
     });
+  },
+
+  loadStorage: async () => {
+    set({ isLoadingStorage: true });
+    try {
+      const data = await fetchStorageInfo();
+      set({
+        storageConfig: normalizeStorageConfig(data.config),
+        storageEnvOverrides: data.env_overrides,
+      });
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "加载存储配置失败");
+    } finally {
+      set({ isLoadingStorage: false });
+    }
+  },
+
+  setStorageType: (value) => {
+    set((state) => state.storageConfig ? {
+      storageConfig: {
+        ...state.storageConfig,
+        type: value,
+      },
+    } : {});
+  },
+
+  setStorageField: (key, value) => {
+    set((state) => state.storageConfig ? {
+      storageConfig: {
+        ...state.storageConfig,
+        [key]: value,
+      },
+    } : {});
+  },
+
+  setMigrateStorageData: (value) => {
+    set({ migrateStorageData: value });
+  },
+
+  saveStorage: async () => {
+    const { storageConfig, migrateStorageData } = get();
+    if (!storageConfig) {
+      return false;
+    }
+
+    set({ isSavingStorage: true });
+    try {
+      const data = await updateStorageSettings({
+        ...storageConfig,
+        migrate_existing_data: migrateStorageData,
+      });
+      set({
+        storageConfig: normalizeStorageConfig(data.storage),
+        storageEnvOverrides: data.env_overrides,
+      });
+      if (data.migration.migrated) {
+        toast.success(`存储配置已保存，已迁移 ${data.migration.accounts} 个账号和 ${data.migration.auth_keys} 条密钥`);
+      } else if (hasStorageEnvOverrides(data.env_overrides)) {
+        toast.success("存储配置已保存，当前环境变量只会作为首次默认值展示");
+      } else {
+        toast.success("存储配置已保存");
+      }
+      return true;
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "保存存储配置失败");
+      return false;
+    } finally {
+      set({ isSavingStorage: false });
+    }
+  },
+
+  saveStorageAndRestart: async () => {
+    const { saveStorage } = get();
+    set({ isRestartingService: true });
+    try {
+      const saved = await saveStorage();
+      if (!saved) {
+        return;
+      }
+      const data = await restartService();
+      toast.success(data.message);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "重启服务失败");
+    } finally {
+      set({ isRestartingService: false });
+    }
   },
 
   loadRegister: async (silent = false) => {

@@ -8,6 +8,7 @@ from pathlib import Path
 import time
 
 from services.storage.base import StorageBackend
+from services.storage.factory import describe_storage_settings, get_storage_env_overrides, resolve_storage_settings
 
 BASE_DIR = Path(__file__).resolve().parents[1]
 DATA_DIR = BASE_DIR / "data"
@@ -175,11 +176,21 @@ class ConfigStore:
         data["auto_remove_invalid_accounts"] = self.auto_remove_invalid_accounts
         data["auto_remove_rate_limited_accounts"] = self.auto_remove_rate_limited_accounts
         data["log_levels"] = self.log_levels
+        data.pop("storage", None)
         data.pop("auth-key", None)
         return data
 
     def get_proxy_settings(self) -> str:
         return str(self.data.get("proxy") or "").strip()
+
+    def get_storage_settings(self) -> dict[str, object]:
+        return describe_storage_settings(self.data.get("storage"), use_env=True)
+
+    def get_storage_env_overrides(self) -> dict[str, bool]:
+        return get_storage_env_overrides(self.data.get("storage"))
+
+    def get_storage_settings_for_save(self) -> dict[str, str]:
+        return resolve_storage_settings(self.data.get("storage"), use_env=False)
 
     def update(self, data: dict[str, object]) -> dict[str, object]:
         next_data = dict(self.data)
@@ -188,11 +199,28 @@ class ConfigStore:
         self._save()
         return self.get()
 
+    def update_storage_settings(self, settings: dict[str, object]) -> dict[str, object]:
+        previous_settings = self.get_storage_settings_for_save()
+        next_settings = resolve_storage_settings(settings, use_env=False)
+        if next_settings.get("type") == "git" and not str(next_settings.get("git_token") or "").strip():
+            next_settings["git_token"] = previous_settings.get("git_token", "")
+        next_data = dict(self.data)
+        next_data["storage"] = next_settings
+        self.data = next_data
+        self._save()
+        return self.get_storage_settings()
+
+    def reload_storage_backend(self) -> StorageBackend:
+        from services.storage.factory import create_storage_backend
+
+        self._storage_backend = create_storage_backend(DATA_DIR, self.data.get("storage"), use_env=True)
+        return self._storage_backend
+
     def get_storage_backend(self) -> StorageBackend:
         """获取存储后端实例（单例）"""
         if self._storage_backend is None:
             from services.storage.factory import create_storage_backend
-            self._storage_backend = create_storage_backend(DATA_DIR)
+            self._storage_backend = create_storage_backend(DATA_DIR, self.data.get("storage"), use_env=True)
         return self._storage_backend
 
 

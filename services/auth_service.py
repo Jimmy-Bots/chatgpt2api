@@ -68,6 +68,12 @@ class AuthService:
     def _save(self) -> None:
         self.storage.save_auth_keys(self._items)
 
+    def replace_storage(self, storage: StorageBackend) -> None:
+        with self._lock:
+            self.storage = storage
+            self._items = self._load()
+            self._last_used_flush_at = {}
+
     @staticmethod
     def _public_item(item: dict[str, object]) -> dict[str, object]:
         return {

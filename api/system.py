@@ -1,14 +1,23 @@
 from __future__ import annotations
 
+import os
+import signal
+import threading
+import time
+
 from fastapi import APIRouter, Header, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, ConfigDict
 
 from api.support import require_admin, require_identity, resolve_image_base_url
-from services.config import config
+from services.account_service import account_service
+from services.auth_service import auth_service
+from services.config import DATA_DIR, config
 from services.image_service import delete_images, list_images
 from services.log_service import log_service
 from services.proxy_service import test_proxy
+from services.storage.factory import resolve_storage_settings
+from services.storage_migration_service import build_storage, snapshot_storage, write_storage_snapshot
 
 
 class SettingsUpdateRequest(BaseModel):
@@ -24,6 +33,36 @@ class ImageDeleteRequest(BaseModel):
     start_date: str = ""
     end_date: str = ""
     all_matching: bool = False
+
+
+class StorageSettingsRequest(BaseModel):
+    type: str = "json"
+    database_url: str = ""
+    git_repo_url: str = ""
+    git_token: str = ""
+    git_branch: str = "main"
+    git_file_path: str = "accounts.json"
+    git_auth_keys_file_path: str = "auth_keys.json"
+    migrate_existing_data: bool = False
+
+
+def _apply_storage_backend() -> dict[str, object]:
+    storage = config.reload_storage_backend()
+    account_service.replace_storage(storage)
+    auth_service.replace_storage(storage)
+    return {
+        "backend": storage.get_backend_info(),
+        "health": storage.health_check(),
+    }
+
+
+def _schedule_restart(delay_seconds: float = 1.0) -> None:
+    def worker() -> None:
+        time.sleep(delay_seconds)
+        os.kill(os.getpid(), signal.SIGTERM)
+
+    thread = threading.Thread(target=worker, name="service-restart", daemon=True)
+    thread.start()
 
 
 def create_router(app_version: str) -> APIRouter:
@@ -82,8 +121,46 @@ def create_router(app_version: str) -> APIRouter:
         require_admin(authorization)
         storage = config.get_storage_backend()
         return {
+            "config": config.get_storage_settings(),
+            "env_overrides": config.get_storage_env_overrides(),
             "backend": storage.get_backend_info(),
             "health": storage.health_check(),
         }
+
+    @router.post("/api/storage/settings")
+    async def save_storage_settings(body: StorageSettingsRequest, authorization: str | None = Header(default=None)):
+        require_admin(authorization)
+        settings = resolve_storage_settings(body.model_dump(mode="python"), use_env=False)
+        previous_storage = config.get_storage_backend()
+        target_storage = build_storage(DATA_DIR, settings, use_env=False)
+        target_health = target_storage.health_check()
+        if target_health.get("status") != "healthy":
+            raise HTTPException(status_code=400, detail={"error": f"目标存储不可用：{target_health.get('error') or '未知错误'}"})
+        migration_result = {
+            "migrated": False,
+            "accounts": 0,
+            "auth_keys": 0,
+        }
+        if body.migrate_existing_data:
+            snapshot = snapshot_storage(previous_storage)
+            counts = write_storage_snapshot(target_storage, snapshot)
+            migration_result = {
+                "migrated": True,
+                **counts,
+            }
+        saved = config.update_storage_settings(settings)
+        applied = _apply_storage_backend()
+        return {
+            "storage": saved,
+            "env_overrides": config.get_storage_env_overrides(),
+            "migration": migration_result,
+            "applied": applied,
+        }
+
+    @router.post("/api/storage/restart")
+    async def restart_service(authorization: str | None = Header(default=None)):
+        require_admin(authorization)
+        _schedule_restart()
+        return {"ok": True, "message": "服务正在重启，请稍后刷新页面"}
 
     return router

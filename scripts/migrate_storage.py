@@ -29,15 +29,16 @@ def export_to_json(output_file: str):
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     storage = create_storage_backend(DATA_DIR)
     accounts = storage.load_accounts()
+    auth_keys = storage.load_auth_keys()
     
     output_path = Path(output_file)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(
-        json.dumps(accounts, ensure_ascii=False, indent=2) + "\n",
+        json.dumps({"accounts": accounts, "auth_keys": auth_keys}, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
     
-    print(f"[migrate] Exported {len(accounts)} accounts to {output_file}")
+    print(f"[migrate] Exported {len(accounts)} accounts and {len(auth_keys)} auth keys to {output_file}")
 
 
 def import_from_json(input_file: str):
@@ -50,18 +51,33 @@ def import_from_json(input_file: str):
         sys.exit(1)
     
     try:
-        accounts = json.loads(input_path.read_text(encoding="utf-8"))
-        if not isinstance(accounts, list):
-            print(f"[migrate] Error: Invalid JSON format, expected array")
-            sys.exit(1)
+        payload = json.loads(input_path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as e:
         print(f"[migrate] Error: Invalid JSON: {e}")
+        sys.exit(1)
+
+    if isinstance(payload, list):
+        accounts = payload
+        auth_keys = []
+    elif isinstance(payload, dict):
+        accounts = payload.get("accounts")
+        auth_keys = payload.get("auth_keys") or []
+    else:
+        print(f"[migrate] Error: Invalid JSON format")
+        sys.exit(1)
+
+    if not isinstance(accounts, list):
+        print(f"[migrate] Error: Invalid JSON format, expected accounts array")
+        sys.exit(1)
+    if not isinstance(auth_keys, list):
+        print(f"[migrate] Error: Invalid JSON format, expected auth_keys array")
         sys.exit(1)
     
     storage = create_storage_backend(DATA_DIR)
     storage.save_accounts(accounts)
+    storage.save_auth_keys(auth_keys)
     
-    print(f"[migrate] Imported {len(accounts)} accounts")
+    print(f"[migrate] Imported {len(accounts)} accounts and {len(auth_keys)} auth keys")
 
 
 def migrate_data(from_backend: str, to_backend: str):
@@ -76,13 +92,15 @@ def migrate_data(from_backend: str, to_backend: str):
         os.environ["STORAGE_BACKEND"] = from_backend
         from_storage = create_storage_backend(DATA_DIR)
         accounts = from_storage.load_accounts()
-        print(f"[migrate] Loaded {len(accounts)} accounts from {from_backend}")
+        auth_keys = from_storage.load_auth_keys()
+        print(f"[migrate] Loaded {len(accounts)} accounts and {len(auth_keys)} auth keys from {from_backend}")
         
         # 写入目标后端
         os.environ["STORAGE_BACKEND"] = to_backend
         to_storage = create_storage_backend(DATA_DIR)
         to_storage.save_accounts(accounts)
-        print(f"[migrate] Saved {len(accounts)} accounts to {to_backend}")
+        to_storage.save_auth_keys(auth_keys)
+        print(f"[migrate] Saved {len(accounts)} accounts and {len(auth_keys)} auth keys to {to_backend}")
         
         print(f"[migrate] Migration completed successfully!")
         

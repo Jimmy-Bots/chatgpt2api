@@ -4,6 +4,7 @@ services:
       context: .
       dockerfile: Dockerfile
     image: chatgpt2api:local
+    restart: unless-stopped
     container_name: chatgpt2api-local
     ports:
       - "8000:80"

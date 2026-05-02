@@ -167,6 +167,12 @@ class AccountService:
     def _save_accounts(self) -> None:
         self.storage.save_accounts(self._accounts)
 
+    def replace_storage(self, storage_backend: StorageBackend) -> None:
+        with self._lock:
+            self.storage = storage_backend
+            self._accounts = self._load_accounts()
+            self._index = 0
+
     def _build_remote_headers(self, access_token: str) -> tuple[dict[str, str], str]:
         account = self.get_account(access_token) or {}
         user_agent = self._clean_token(account.get("user-agent") or account.get("user_agent"))

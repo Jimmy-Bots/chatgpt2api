@@ -10,6 +10,7 @@ import { CPAPoolDialog } from "./components/cpa-pool-dialog";
 import { CPAPoolsCard } from "./components/cpa-pools-card";
 import { ImportBrowserDialog } from "./components/import-browser-dialog";
 import { SettingsHeader } from "./components/settings-header";
+import { StorageSettingsCard } from "./components/storage-settings-card";
 import { Sub2APIConnections } from "./components/sub2api-connections";
 import { UserKeysCard } from "./components/user-keys-card";
 import { useSettingsStore } from "./store";
@@ -53,6 +54,7 @@ function SettingsPageContent() {
       <SettingsHeader />
       <section className="space-y-6">
         <ConfigCard />
+        <StorageSettingsCard />
         <UserKeysCard />
         <CPAPoolsCard />
         <Sub2APIConnections />
